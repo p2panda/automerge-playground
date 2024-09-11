@@ -19,7 +19,7 @@ const NETWORK_ID: [u8; 32] = [
 
 const TEST_TOPIC_ID: [u8; 32] = [1; 32];
 
-const WINDOW_SIZE: usize = 4;
+const PRUNE_NTH: usize = 4;
 
 #[derive(Clone, Debug, Hash, Default, Eq, PartialEq, Serialize, Deserialize)]
 struct LogId(pub u64);
@@ -82,7 +82,7 @@ async fn main() -> Result<()> {
                     &private_key,
                     &log_id,
                     Some(b"Hello Panda"),
-                    counter % WINDOW_SIZE == 0,
+                    counter % PRUNE_NTH == 0,
                 )
                 .await
                 .expect("creating operation");
