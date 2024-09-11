@@ -214,6 +214,7 @@ async fn ingest_operation(
         header,
         body,
     };
+    // @TODO: Backlink _needs_ to exists if there's no pruning point
     validate_operation(&operation)?;
 
     let mut store = store.0.lock().await;
