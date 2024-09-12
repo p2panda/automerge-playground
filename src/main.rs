@@ -33,8 +33,8 @@ struct Extensions {
     #[serde(rename = "l")]
     pub log_id: LogId,
 
-    #[serde(rename = "p", skip_serializing_if = "Option::is_none")]
-    pub prune_flag: Option<PruneFlag>,
+    #[serde(rename = "p", skip_serializing_if = "std::ops::Not::not")]
+    pub prune_flag: bool,
 }
 
 impl Extension<LogId> for Extensions {
@@ -45,7 +45,7 @@ impl Extension<LogId> for Extensions {
 
 impl Extension<PruneFlag> for Extensions {
     fn extract(&self) -> Option<PruneFlag> {
-        Some(PruneFlag(self.prune_flag.is_some()))
+        Some(PruneFlag(self.prune_flag))
     }
 }
 
