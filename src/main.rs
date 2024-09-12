@@ -234,7 +234,6 @@ async fn ingest_operation(
         header,
         body,
     };
-    // @TODO: Backlink _needs_ to exists if there's no pruning point
     validate_operation(&operation)?;
 
     let mut store = store.0.write().unwrap();
@@ -250,6 +249,7 @@ async fn ingest_operation(
             .extract()
             .ok_or(anyhow!("missing 'prune_flag' field in header"))?;
 
+        // @TODO: Move this into `p2panda-core`
         if !prune_flag.is_set() {
             let latest_operation = store
                 .latest_operation(operation.header.public_key, log_id.to_owned())
