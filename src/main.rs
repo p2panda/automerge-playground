@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, Context, Result};
@@ -8,8 +9,8 @@ use p2panda_core::{
 use p2panda_net::network::{InEvent, OutEvent};
 use p2panda_net::{LocalDiscovery, NetworkBuilder};
 use p2panda_store::{LogStore, MemoryStore, OperationStore};
+use p2panda_sync::protocols::log_height::LogHeightSyncProtocol;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
 use tokio::task;
 
 const NETWORK_ID: [u8; 32] = [
@@ -32,7 +33,7 @@ struct Extensions {
     #[serde(rename = "l")]
     pub log_id: LogId,
 
-    #[serde(rename = "p")]
+    #[serde(rename = "p", skip_serializing_if = "Option::is_none")]
     pub prune_flag: Option<PruneFlag>,
 }
 
@@ -49,11 +50,11 @@ impl Extension<PruneFlag> for Extensions {
 }
 
 #[derive(Clone)]
-struct Store(Arc<Mutex<MemoryStore<LogId, Extensions>>>);
+struct Store(Arc<RwLock<MemoryStore<LogId, Extensions>>>);
 
 impl Store {
     pub fn new() -> Self {
-        Self(Arc::new(Mutex::new(MemoryStore::new())))
+        Self(Arc::new(RwLock::new(MemoryStore::new())))
     }
 }
 
@@ -61,19 +62,28 @@ impl Store {
 async fn main() -> Result<()> {
     let private_key = PrivateKey::new();
     let store = Store::new();
+    let log_id = LogId(1);
 
-    let network = NetworkBuilder::new(NETWORK_ID)
-        .private_key(private_key.clone())
-        .discovery(LocalDiscovery::new()?)
-        .build()
-        .await?;
+    let mut sync_map = HashMap::new();
+    sync_map.insert(TEST_TOPIC_ID, log_id.clone());
+
+    let network = NetworkBuilder::new(
+        NETWORK_ID,
+        LogHeightSyncProtocol {
+            log_ids: sync_map,
+            store: store.0.clone(),
+        },
+    )
+    .private_key(private_key.clone())
+    .discovery(LocalDiscovery::new()?)
+    .build()
+    .await?;
 
     let (tx, mut rx) = network.subscribe(TEST_TOPIC_ID).await?;
 
     {
         let mut store = store.clone();
         task::spawn(async move {
-            let log_id = LogId(1);
             let mut counter = 0;
 
             loop {
@@ -149,7 +159,7 @@ async fn create_operation(
 
     let public_key = private_key.public_key();
 
-    let mut store = store.0.lock().await;
+    let mut store = store.0.write().unwrap();
 
     let latest_operation = store.latest_operation(public_key, log_id.to_owned())?;
 
@@ -217,7 +227,7 @@ async fn ingest_operation(
     // @TODO: Backlink _needs_ to exists if there's no pruning point
     validate_operation(&operation)?;
 
-    let mut store = store.0.lock().await;
+    let mut store = store.0.write().unwrap();
 
     let already_exists = store.get_operation(operation.hash)?.is_some();
     if !already_exists {
