@@ -174,11 +174,7 @@ async fn create_operation(
 
     let extensions = Extensions {
         log_id: log_id.to_owned(),
-        prune_flag: if prune_flag {
-            Some(PruneFlag(true))
-        } else {
-            None
-        },
+        prune_flag,
     };
 
     let mut header = Header {
