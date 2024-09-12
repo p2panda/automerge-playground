@@ -20,7 +20,7 @@ const NETWORK_ID: [u8; 32] = [
 
 const TEST_TOPIC_ID: [u8; 32] = [1; 32];
 
-const PRUNE_NTH: usize = 4;
+const PRUNE_NTH: usize = 24;
 
 #[derive(Clone, Debug, Hash, Default, Eq, PartialEq, Serialize, Deserialize)]
 struct LogId(pub u64);
@@ -246,6 +246,13 @@ async fn ingest_operation(
         if let Some(latest_operation) = latest_operation {
             validate_backlink(&latest_operation.header, &operation.header)?;
         }
+
+        let log = store.get_log(operation.header.public_key, log_id.clone())?;
+        println!(
+            "log_len={}, public_key={}",
+            log.len(),
+            operation.header.public_key
+        );
 
         store
             .insert_operation(operation.clone(), log_id.clone())
