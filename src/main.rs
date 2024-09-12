@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use p2panda_core::{
     validate_backlink, validate_operation, Body, Extension, Header, Operation, PrivateKey,
 };
@@ -27,6 +27,12 @@ struct LogId(pub u64);
 
 #[derive(Clone, Debug, Hash, Default, Eq, PartialEq, Serialize, Deserialize)]
 struct PruneFlag(pub bool);
+
+impl PruneFlag {
+    fn is_set(&self) -> bool {
+        self.0
+    }
+}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 struct Extensions {
@@ -239,12 +245,24 @@ async fn ingest_operation(
             .header
             .extract()
             .ok_or(anyhow!("missing 'log_id' field in header"))?;
-        let latest_operation = store
-            .latest_operation(operation.header.public_key, log_id.to_owned())
-            .context("critical store failure")?;
+        let prune_flag: PruneFlag = operation
+            .header
+            .extract()
+            .ok_or(anyhow!("missing 'prune_flag' field in header"))?;
 
-        if let Some(latest_operation) = latest_operation {
-            validate_backlink(&latest_operation.header, &operation.header)?;
+        if !prune_flag.is_set() {
+            let latest_operation = store
+                .latest_operation(operation.header.public_key, log_id.to_owned())
+                .context("critical store failure")?;
+
+            match latest_operation {
+                Some(latest_operation) => {
+                    validate_backlink(&latest_operation.header, &operation.header)?;
+                }
+                None => {
+                    bail!("missing previous operation");
+                }
+            }
         }
 
         let log = store.get_log(operation.header.public_key, log_id.clone())?;
@@ -258,12 +276,7 @@ async fn ingest_operation(
             .insert_operation(operation.clone(), log_id.clone())
             .context("critical store failure")?;
 
-        let prune_flag: PruneFlag = operation
-            .header
-            .extract()
-            .ok_or(anyhow!("missing 'prune_flag' field in header"))?;
-
-        if prune_flag.0 {
+        if prune_flag.is_set() {
             store.delete_operations(
                 operation.header.public_key,
                 log_id,
