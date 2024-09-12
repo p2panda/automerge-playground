@@ -33,8 +33,16 @@ struct Extensions {
     #[serde(rename = "l")]
     pub log_id: LogId,
 
-    #[serde(rename = "p", skip_serializing_if = "std::ops::Not::not")]
+    #[serde(
+        rename = "p",
+        skip_serializing_if = "std::ops::Not::not",
+        default = "default_prune_flag"
+    )]
     pub prune_flag: bool,
+}
+
+fn default_prune_flag() -> bool {
+    false
 }
 
 impl Extension<LogId> for Extensions {
@@ -119,22 +127,22 @@ async fn main() -> Result<()> {
                     Ok(OutEvent::Ready) => {
                         println!("connected");
                     }
-                    Ok(OutEvent::Message { bytes, .. }) => {
-                        let Ok((header, body)) = decode_operation(&bytes) else {
-                            eprintln!("failed decoding operation");
-                            continue;
-                        };
+                    Ok(OutEvent::Message { bytes, .. }) => match decode_operation(&bytes) {
+                        Ok((header, body)) => {
+                            println!(
+                                "received operation {} {}",
+                                header.seq_num, header.public_key
+                            );
 
-                        println!(
-                            "received operation {} {}",
-                            header.seq_num, header.public_key
-                        );
-
-                        if let Err(err) = ingest_operation(&mut store, header, body).await {
-                            eprintln!("failed ingesting operation: {err}");
-                            continue;
+                            if let Err(err) = ingest_operation(&mut store, header, body).await {
+                                eprintln!("failed ingesting operation: {err}");
+                                continue;
+                            }
                         }
-                    }
+                        Err(err) => {
+                            eprintln!("failed decoding operation: {err}");
+                        }
+                    },
                     Err(err) => {
                         eprintln!("failed receiver: {err}");
                     }
