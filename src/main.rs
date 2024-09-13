@@ -181,14 +181,16 @@ async fn main() -> Result<()> {
             let (buf_tx, buf_rx) = mpsc::channel::<Operation<Extensions>>(128);
             let mut buf_stream = ReceiverStream::new(buf_rx);
             let stream = stream! {
-                tokio::select! {
-                    biased;
+                loop {
+                    tokio::select! {
+                        biased;
 
-                    Some((header, body)) = stream.next() => {
-                        yield (header, body);
-                    }
-                    Some(operation) = buf_stream.next() => {
-                        yield (operation.header, operation.body);
+                        Some((header, body)) = stream.next() => {
+                            yield (header, body);
+                        }
+                        Some(operation) = buf_stream.next() => {
+                            yield (operation.header, operation.body);
+                        }
                     }
                 }
             };
