@@ -87,6 +87,8 @@ async fn main() -> Result<()> {
     let store = Store::new();
     let log_id = LogId(1);
 
+    println!("me: {}", private_key.public_key());
+
     let mut sync_map = HashMap::new();
     sync_map.insert(TEST_TOPIC_ID, log_id.clone());
 
@@ -120,6 +122,10 @@ async fn main() -> Result<()> {
                 .await
                 .expect("creating operation");
 
+                println!(
+                    "created operation {} {}",
+                    operation.header.seq_num, operation.header.public_key
+                );
                 let bytes =
                     encode_operation(operation.header, operation.body).expect("encoding operation");
 
