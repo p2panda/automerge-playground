@@ -250,7 +250,7 @@ async fn ingest_operation(
             .ok_or(anyhow!("missing 'prune_flag' field in header"))?;
 
         // @TODO: Move this into `p2panda-core`
-        if !prune_flag.is_set() {
+        if !prune_flag.is_set() && operation.header.seq_num > 0 {
             let latest_operation = store
                 .latest_operation(operation.header.public_key, log_id.to_owned())
                 .context("critical store failure")?;
