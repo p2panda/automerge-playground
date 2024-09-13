@@ -1993,6 +1993,8 @@ dependencies = [
  "p2panda-store",
  "p2panda-stream",
  "p2panda-sync",
+ "pin-project",
+ "pin-project-lite",
  "serde",
  "tokio",
  "tokio-stream",

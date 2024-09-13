@@ -12,6 +12,8 @@ p2panda-net = { git = "https://github.com/p2panda/p2panda.git", branch = "net-sy
 p2panda-store = { git = "https://github.com/p2panda/p2panda.git", branch = "net-sync" }
 p2panda-stream = { git = "https://github.com/p2panda/p2panda.git", branch = "streams" }
 p2panda-sync = { git = "https://github.com/p2panda/p2panda.git", branch = "net-sync" }
+pin-project = "1.1.5"
+pin-project-lite = "0.2.14"
 serde = { version = "1.0.210", features = ["derive"] }
 tokio = { version = "1.40.0", features = ["full"] }
 tokio-stream = "0.1.16"

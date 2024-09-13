@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
     .build()
     .await?;
 
-    let (tx, mut rx) = network.subscribe(TEST_TOPIC_ID).await?;
+    let (tx, rx) = network.subscribe(TEST_TOPIC_ID).await?;
 
     {
         let mut store = store.clone();
@@ -143,85 +143,73 @@ async fn main() -> Result<()> {
     }
 
     {
-        let mut store = store.clone();
+        let store = store.clone();
 
         task::spawn(async move {
             let stream = BroadcastStream::new(rx);
 
-            let mut stream = stream.filter_map(|event| match event {
-                Ok(OutEvent::Ready) => None,
-                Ok(OutEvent::Message { bytes, .. }) => match decode_operation(&bytes) {
-                    Ok((header, body)) => {
-                        println!(
-                            "received operation {} {}",
-                            header.seq_num, header.public_key
-                        );
+            let stream = stream.filter_map(|event| async {
+                match event {
+                    Ok(OutEvent::Ready) => None,
+                    Ok(OutEvent::Message { bytes, .. }) => match decode_operation(&bytes) {
+                        Ok((header, body)) => {
+                            println!(
+                                "received operation {} {}",
+                                header.seq_num, header.public_key
+                            );
 
-                        Some((header, body))
-                    }
+                            Some((header, body))
+                        }
+                        Err(err) => {
+                            eprintln!("failed decoding operation: {err}");
+                            None
+                        }
+                    },
                     Err(err) => {
-                        eprintln!("failed decoding operation: {err}");
-                        None
-                    }
-                },
-                Err(err) => {
-                    eprintln!("failed receiver: {err}");
-                    None
-                }
-            });
-
-            let stream = stream.then(|(header, body)| async {
-                match ingest_operation(&mut store, header, body).await {
-                    Ok(operation) => Some(operation),
-                    Err(err) => {
-                        eprintln!("failed ingesting operation: {err}");
+                        eprintln!("failed receiver: {err}");
                         None
                     }
                 }
             });
+
+            let stream = tokio_stream::StreamExt::chunks_timeout(
+                stream,
+                10,
+                std::time::Duration::from_millis(50),
+            );
+
+            let stream = stream.map(|operations| async {
+                // @TODO: We don't want to acquire a lock on every item, batching would be nice
+                // instead (we don't have a method for it in the store though yet)
+                let mut store = store.clone();
+
+                for (header, body) in &operations {
+                    // @TODO: Would be nice to pass arguments in by reference for the store. The
+                    // trait should not dictate that (for memory it'll be cloned though)
+                    match ingest_operation(&mut store, header.clone(), body.clone()).await {
+                        Ok(_) => (),
+                        Err(err) => {
+                            eprintln!("failed ingesting operation: {err}");
+                        }
+                    }
+                }
+
+                // @TODO: Remove failed operations!
+                futures::stream::iter(operations)
+            });
+
+            let stream = stream.buffered(10);
+            let stream = stream.flatten();
 
             tokio::pin!(stream);
 
-            // let stream = stream.then(|_|);
-            //
             loop {
-                if let Some(Some(operation)) = stream.next().await {
+                if let Some(operation) = stream.next().await {
                     println!("{:?}", operation);
                 }
             }
         });
     }
-
-    // {
-    //     task::spawn(async move {
-    //         loop {
-    //             match rx.recv().await {
-    //                 Ok(OutEvent::Ready) => {
-    //                     println!("connected");
-    //                 }
-    //                 Ok(OutEvent::Message { bytes, .. }) => match decode_operation(&bytes) {
-    //                     Ok((header, body)) => {
-    //                         println!(
-    //                             "received operation {} {}",
-    //                             header.seq_num, header.public_key
-    //                         );
-    //
-    //                         if let Err(err) = ingest_operation(&mut store, header, body).await {
-    //                             eprintln!("failed ingesting operation: {err}");
-    //                             continue;
-    //                         }
-    //                     }
-    //                     Err(err) => {
-    //                         eprintln!("failed decoding operation: {err}");
-    //                     }
-    //                 },
-    //                 Err(err) => {
-    //                     eprintln!("failed receiver: {err}");
-    //                 }
-    //             }
-    //         }
-    //     });
-    // }
 
     tokio::signal::ctrl_c().await?;
 
