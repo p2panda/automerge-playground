@@ -12,6 +12,9 @@ use p2panda_store::{LogStore, MemoryStore, OperationStore};
 use p2panda_sync::protocols::log_height::LogHeightSyncProtocol;
 use serde::{Deserialize, Serialize};
 use tokio::task;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::EnvFilter;
 
 const NETWORK_ID: [u8; 32] = [
     88, 32, 213, 152, 167, 24, 186, 1, 3, 254, 88, 233, 132, 3, 250, 122, 6, 92, 186, 200, 3, 56,
@@ -74,6 +77,12 @@ impl Store {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .with(EnvFilter::from_default_env())
+        .try_init()
+        .ok();
+
     let private_key = PrivateKey::new();
     let store = Store::new();
     let log_id = LogId(1);
