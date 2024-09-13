@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
                     &private_key,
                     &log_id,
                     Some(b"Hello Panda"),
-                    counter % PRUNE_NTH == 0,
+                    counter % PRUNE_NTH == 0 && counter > 0,
                 )
                 .await
                 .expect("creating operation");
