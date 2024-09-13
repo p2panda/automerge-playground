@@ -112,6 +112,8 @@ async fn main() -> Result<()> {
             let mut counter = 0;
 
             loop {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+
                 let operation = create_operation(
                     &mut store,
                     &private_key,
@@ -133,8 +135,6 @@ async fn main() -> Result<()> {
                 tx.send(InEvent::Message { bytes })
                     .await
                     .expect("sending message");
-
-                tokio::time::sleep(Duration::from_secs(2)).await;
 
                 counter += 1;
             }
