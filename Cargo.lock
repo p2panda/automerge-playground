@@ -1987,12 +1987,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ciborium",
+ "futures",
  "p2panda-core",
  "p2panda-net",
  "p2panda-store",
+ "p2panda-stream",
  "p2panda-sync",
  "serde",
  "tokio",
+ "tokio-stream",
  "tracing-subscriber",
 ]
 
@@ -2219,6 +2222,14 @@ version = "0.1.0"
 source = "git+https://github.com/p2panda/p2panda.git?branch=net-sync#eb3b80c701726d3d8ff29e4063a4263107be2b8b"
 dependencies = [
  "p2panda-core",
+ "thiserror",
+]
+
+[[package]]
+name = "p2panda-stream"
+version = "0.1.0"
+source = "git+https://github.com/p2panda/p2panda.git?branch=streams#0c35a4df657fa954759b27aa3e7d2bf58578360d"
+dependencies = [
  "thiserror",
 ]
 
@@ -2779,9 +2790,9 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a908a6e00f1fdd0dfd9c0eb08ce85126f6d8bbda50017e74bc4a4b7d4a926a4"
+checksum = "0884ad60e090bf1345b93da0a5de8923c93884cd03f40dfcfddd3b4bee661853"
 dependencies = [
  "bitflags 2.6.0",
 ]

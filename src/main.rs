@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, bail, Context, Result};
+use futures::StreamExt;
 use p2panda_core::{
     validate_backlink, validate_operation, Body, Extension, Header, Operation, PrivateKey,
 };
@@ -12,9 +13,10 @@ use p2panda_store::{LogStore, MemoryStore, OperationStore};
 use p2panda_sync::protocols::log_height::LogHeightSyncProtocol;
 use serde::{Deserialize, Serialize};
 use tokio::task;
+use tokio_stream::wrappers::BroadcastStream;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 
 const NETWORK_ID: [u8; 32] = [
     88, 32, 213, 152, 167, 24, 186, 1, 3, 254, 88, 233, 132, 3, 250, 122, 6, 92, 186, 200, 3, 56,
@@ -109,7 +111,7 @@ async fn main() -> Result<()> {
     {
         let mut store = store.clone();
         task::spawn(async move {
-            let mut counter = 0;
+            let mut counter = 1;
 
             loop {
                 tokio::time::sleep(Duration::from_secs(2)).await;
@@ -142,35 +144,84 @@ async fn main() -> Result<()> {
 
     {
         let mut store = store.clone();
-        task::spawn(async move {
-            loop {
-                match rx.recv().await {
-                    Ok(OutEvent::Ready) => {
-                        println!("connected");
-                    }
-                    Ok(OutEvent::Message { bytes, .. }) => match decode_operation(&bytes) {
-                        Ok((header, body)) => {
-                            println!(
-                                "received operation {} {}",
-                                header.seq_num, header.public_key
-                            );
 
-                            if let Err(err) = ingest_operation(&mut store, header, body).await {
-                                eprintln!("failed ingesting operation: {err}");
-                                continue;
-                            }
-                        }
-                        Err(err) => {
-                            eprintln!("failed decoding operation: {err}");
-                        }
-                    },
-                    Err(err) => {
-                        eprintln!("failed receiver: {err}");
+        task::spawn(async move {
+            let stream = BroadcastStream::new(rx);
+
+            let mut stream = stream.filter_map(|event| match event {
+                Ok(OutEvent::Ready) => None,
+                Ok(OutEvent::Message { bytes, .. }) => match decode_operation(&bytes) {
+                    Ok((header, body)) => {
+                        println!(
+                            "received operation {} {}",
+                            header.seq_num, header.public_key
+                        );
+
+                        Some((header, body))
                     }
+                    Err(err) => {
+                        eprintln!("failed decoding operation: {err}");
+                        None
+                    }
+                },
+                Err(err) => {
+                    eprintln!("failed receiver: {err}");
+                    None
+                }
+            });
+
+            let stream = stream.then(|(header, body)| async {
+                match ingest_operation(&mut store, header, body).await {
+                    Ok(operation) => Some(operation),
+                    Err(err) => {
+                        eprintln!("failed ingesting operation: {err}");
+                        None
+                    }
+                }
+            });
+
+            tokio::pin!(stream);
+
+            // let stream = stream.then(|_|);
+            //
+            loop {
+                if let Some(Some(operation)) = stream.next().await {
+                    println!("{:?}", operation);
                 }
             }
         });
     }
+
+    // {
+    //     task::spawn(async move {
+    //         loop {
+    //             match rx.recv().await {
+    //                 Ok(OutEvent::Ready) => {
+    //                     println!("connected");
+    //                 }
+    //                 Ok(OutEvent::Message { bytes, .. }) => match decode_operation(&bytes) {
+    //                     Ok((header, body)) => {
+    //                         println!(
+    //                             "received operation {} {}",
+    //                             header.seq_num, header.public_key
+    //                         );
+    //
+    //                         if let Err(err) = ingest_operation(&mut store, header, body).await {
+    //                             eprintln!("failed ingesting operation: {err}");
+    //                             continue;
+    //                         }
+    //                     }
+    //                     Err(err) => {
+    //                         eprintln!("failed decoding operation: {err}");
+    //                     }
+    //                 },
+    //                 Err(err) => {
+    //                     eprintln!("failed receiver: {err}");
+    //                 }
+    //             }
+    //         }
+    //     });
+    // }
 
     tokio::signal::ctrl_c().await?;
 
@@ -229,6 +280,10 @@ async fn create_operation(
     store.insert_operation(operation.clone(), log_id.to_owned())?;
 
     if prune_flag {
+        assert!(
+            operation.header.seq_num > 0,
+            "can't prune from first operation in log"
+        );
         store.delete_operations(
             operation.header.public_key,
             log_id.to_owned(),

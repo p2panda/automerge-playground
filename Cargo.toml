@@ -6,10 +6,13 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.87"
 ciborium = "0.2.2"
+futures = "0.3.30"
 p2panda-core = { git = "https://github.com/p2panda/p2panda.git", branch = "net-sync" }
 p2panda-net = { git = "https://github.com/p2panda/p2panda.git", branch = "net-sync" }
 p2panda-store = { git = "https://github.com/p2panda/p2panda.git", branch = "net-sync" }
+p2panda-stream = { git = "https://github.com/p2panda/p2panda.git", branch = "streams" }
 p2panda-sync = { git = "https://github.com/p2panda/p2panda.git", branch = "net-sync" }
 serde = { version = "1.0.210", features = ["derive"] }
 tokio = { version = "1.40.0", features = ["full"] }
+tokio-stream = "0.1.16"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
