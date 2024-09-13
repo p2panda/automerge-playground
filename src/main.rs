@@ -3,20 +3,24 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, bail, Context, Result};
+use async_stream::stream;
+use futures::channel::mpsc::Receiver;
 use futures::StreamExt;
 use p2panda_core::{
-    validate_backlink, validate_operation, Body, Extension, Header, Operation, PrivateKey,
+    validate_backlink, validate_operation, Body, Extension, Header, Operation, OperationError,
+    PrivateKey,
 };
 use p2panda_net::network::{InEvent, OutEvent};
 use p2panda_net::{LocalDiscovery, NetworkBuilder};
 use p2panda_store::{LogStore, MemoryStore, OperationStore};
 use p2panda_sync::protocols::log_height::LogHeightSyncProtocol;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 use tokio::task;
-use tokio_stream::wrappers::BroadcastStream;
-use tracing_subscriber::EnvFilter;
+use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::EnvFilter;
 
 const NETWORK_ID: [u8; 32] = [
     88, 32, 213, 152, 167, 24, 186, 1, 3, 254, 88, 233, 132, 3, 250, 122, 6, 92, 186, 200, 3, 56,
@@ -172,6 +176,23 @@ async fn main() -> Result<()> {
                 }
             });
 
+            tokio::pin!(stream);
+
+            let (buf_tx, buf_rx) = mpsc::channel::<Operation<Extensions>>(128);
+            let mut buf_stream = ReceiverStream::new(buf_rx);
+            let stream = stream! {
+                tokio::select! {
+                    biased;
+
+                    Some((header, body)) = stream.next() => {
+                        yield (header, body);
+                    }
+                    Some(operation) = buf_stream.next() => {
+                        yield (operation.header, operation.body);
+                    }
+                }
+            };
+
             let stream = tokio_stream::StreamExt::chunks_timeout(
                 stream,
                 10,
@@ -183,19 +204,27 @@ async fn main() -> Result<()> {
                 // instead (we don't have a method for it in the store though yet)
                 let mut store = store.clone();
 
-                for (header, body) in &operations {
+                let mut validated_operations = vec![];
+
+                for (header, body) in operations {
                     // @TODO: Would be nice to pass arguments in by reference for the store. The
                     // trait should not dictate that (for memory it'll be cloned though)
                     match ingest_operation(&mut store, header.clone(), body.clone()).await {
-                        Ok(_) => (),
+                        Ok(IngestResult::Success(operation)) => {
+                            validated_operations.push(operation)
+                        } // store and forward,
+                        Ok(IngestResult::Retry(operation)) => buf_tx
+                            .send(operation)
+                            .await
+                            .expect("channel receiver closed"), // push to buffer
+                        Ok(IngestResult::Invalid(_)) => (),
                         Err(err) => {
                             eprintln!("failed ingesting operation: {err}");
                         }
                     }
                 }
 
-                // @TODO: Remove failed operations!
-                futures::stream::iter(operations)
+                futures::stream::iter(validated_operations)
             });
 
             let stream = stream.buffered(10);
@@ -282,17 +311,26 @@ async fn create_operation(
     Ok(operation)
 }
 
+enum IngestResult {
+    Success(Operation<Extensions>),
+    Retry(Operation<Extensions>),
+    Invalid(OperationError),
+}
+
 async fn ingest_operation(
     store: &mut Store,
     header: Header<Extensions>,
     body: Option<Body>,
-) -> Result<Operation<Extensions>> {
+) -> Result<IngestResult> {
     let operation = Operation {
         hash: header.hash(),
         header,
         body,
     };
-    validate_operation(&operation)?;
+
+    if let Err(err) = validate_operation(&operation) {
+        return Ok(IngestResult::Invalid(err));
+    }
 
     let mut store = store.0.write().unwrap();
 
@@ -315,11 +353,27 @@ async fn ingest_operation(
 
             match latest_operation {
                 Some(latest_operation) => {
-                    validate_backlink(&latest_operation.header, &operation.header)?;
+                    if let Err(err) = validate_backlink(&latest_operation.header, &operation.header)
+                    {
+                        match err {
+                            // These errors signify that the sequence number is incremental
+                            // however the backlink does not match
+                            OperationError::BacklinkMismatch
+                            | OperationError::BacklinkMissing
+                            // A log can only contain operations from one author
+                            | OperationError::TooManyAuthors => {
+                                return Ok(IngestResult::Invalid(err))
+                            }
+                            // We observe a gap in the log and therefore can't validate the
+                            // backlink yet
+                            OperationError::SeqNumNonIncremental(_, _) => {
+                                return Ok(IngestResult::Retry(operation))
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
                 }
-                None => {
-                    bail!("missing previous operation");
-                }
+                None => return Ok(IngestResult::Retry(operation)),
             }
         }
 
@@ -343,7 +397,7 @@ async fn ingest_operation(
         }
     }
 
-    Ok(operation)
+    Ok(IngestResult::Success(operation))
 }
 
 fn decode_operation(bytes: &[u8]) -> Result<(Header<Extensions>, Option<Body>)> {

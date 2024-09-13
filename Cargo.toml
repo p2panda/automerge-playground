@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.87"
+async-stream = "0.3.5"
 ciborium = "0.2.2"
 futures = "0.3.30"
 p2panda-core = { git = "https://github.com/p2panda/p2panda.git", branch = "net-sync" }
