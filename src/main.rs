@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use async_stream::stream;
-use futures::channel::mpsc::Receiver;
 use futures::StreamExt;
 use p2panda_core::{
     validate_backlink, validate_operation, Body, Extension, Header, Operation, OperationError,
@@ -202,8 +201,6 @@ async fn main() -> Result<()> {
             );
 
             let stream = stream.map(|operations| async {
-                // @TODO: We don't want to acquire a lock on every item, batching would be nice
-                // instead (we don't have a method for it in the store though yet)
                 let mut store = store.clone();
 
                 let mut validated_operations = vec![];
@@ -316,6 +313,7 @@ async fn create_operation(
 enum IngestResult {
     Success(Operation<Extensions>),
     Retry(Operation<Extensions>),
+    #[allow(dead_code)]
     Invalid(OperationError),
 }
 
