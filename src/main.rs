@@ -190,7 +190,7 @@ async fn main() -> Result<()> {
                 Ok(OutEvent::Ready) => {
                     println!("connected");
                     None
-                },
+                }
                 Ok(OutEvent::Message { bytes, .. }) => match decode_operation(&bytes) {
                     Ok((header, body)) => {
                         println!(
@@ -270,7 +270,14 @@ async fn main() -> Result<()> {
             if let Some(operation) = stream.next().await {
                 if let Some(body) = operation.body {
                     let mut doc = doc.write().unwrap();
-                    doc.load_incremental(&body.to_bytes()).unwrap();
+
+                    let prune_flag: PruneFlag = operation.header.extract().unwrap();
+                    if prune_flag.is_set() {
+                        let mut doc_remote = AutoCommit::load(&body.to_bytes()).unwrap();
+                        doc.merge(&mut doc_remote).unwrap();
+                    } else {
+                        doc.load_incremental(&body.to_bytes()).unwrap();
+                    }
                     let serialized =
                         serde_json::to_string(&automerge::AutoSerde::from(&doc.clone())).unwrap();
                     println!("{serialized}");
