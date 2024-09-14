@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use anyhow::{anyhow, Context, Result};
 use async_stream::stream;
+use automerge::transaction::Transactable;
+use automerge::{AutoCommit, ObjType};
 use futures::StreamExt;
 use p2panda_core::{
     validate_backlink, validate_operation, Body, Extension, Header, Operation, OperationError,
@@ -27,8 +30,6 @@ const NETWORK_ID: [u8; 32] = [
 ];
 
 const TEST_TOPIC_ID: [u8; 32] = [1; 32];
-
-const PRUNE_NTH: usize = 24;
 
 #[derive(Clone, Debug, Hash, Default, Eq, PartialEq, Serialize, Deserialize)]
 struct LogId(pub u64);
@@ -80,6 +81,16 @@ impl Store {
     }
 }
 
+fn input_loop(line_tx: mpsc::Sender<String>) -> Result<()> {
+    let mut buffer = String::new();
+    let stdin = std::io::stdin();
+    loop {
+        stdin.read_line(&mut buffer)?;
+        line_tx.blocking_send(buffer.clone())?;
+        buffer.clear();
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
@@ -87,6 +98,13 @@ async fn main() -> Result<()> {
         .with(EnvFilter::from_default_env())
         .try_init()
         .ok();
+
+    let mut doc = AutoCommit::new();
+    let contacts = doc.put_object(automerge::ROOT, "contacts", ObjType::List)?;
+    let doc = Arc::new(RwLock::new(doc));
+
+    let (line_tx, mut line_rx) = mpsc::channel(1);
+    std::thread::spawn(move || input_loop(line_tx));
 
     let private_key = PrivateKey::new();
     let store = Store::new();
@@ -113,21 +131,39 @@ async fn main() -> Result<()> {
 
     {
         let mut store = store.clone();
+        let doc = doc.clone();
+
         task::spawn(async move {
-            let mut counter = 1;
+            while let Some(text) = line_rx.recv().await {
+                let parts: Vec<_> = text.split(' ').collect();
 
-            loop {
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                if parts.len() != 3 && parts.len() != 4 {
+                    continue;
+                }
 
-                let operation = create_operation(
-                    &mut store,
-                    &private_key,
-                    &log_id,
-                    Some(b"Hello Panda"),
-                    counter % PRUNE_NTH == 0 && counter > 0,
-                )
-                .await
-                .expect("creating operation");
+                let Ok(index) = usize::from_str(parts[0]) else {
+                    continue;
+                };
+
+                let prune_flag = parts.len() == 4 && parts[3] == "prune";
+
+                let bytes = {
+                    let mut doc = doc.write().unwrap();
+                    let item = doc.insert_object(&contacts, index, ObjType::Map).unwrap();
+                    doc.put(&item, "name", parts[1]).unwrap();
+                    doc.put(&item, "age", parts[2]).unwrap();
+
+                    if prune_flag {
+                        doc.save()
+                    } else {
+                        doc.save_incremental()
+                    }
+                };
+
+                let operation =
+                    create_operation(&mut store, &private_key, &log_id, Some(&bytes), prune_flag)
+                        .await
+                        .expect("creating operation");
 
                 println!(
                     "created operation {} {}",
@@ -139,105 +175,103 @@ async fn main() -> Result<()> {
                 tx.send(InEvent::Message { bytes })
                     .await
                     .expect("sending message");
-
-                counter += 1;
             }
         });
     }
 
-    {
-        let store = store.clone();
+    task::spawn(async move {
+        let stream = BroadcastStream::new(rx);
 
-        task::spawn(async move {
-            let stream = BroadcastStream::new(rx);
+        let stream = stream.filter_map(|event| async {
+            match event {
+                Ok(OutEvent::Ready) => None,
+                Ok(OutEvent::Message { bytes, .. }) => match decode_operation(&bytes) {
+                    Ok((header, body)) => {
+                        println!(
+                            "received operation {} {}",
+                            header.seq_num, header.public_key
+                        );
 
-            let stream = stream.filter_map(|event| async {
-                match event {
-                    Ok(OutEvent::Ready) => None,
-                    Ok(OutEvent::Message { bytes, .. }) => match decode_operation(&bytes) {
-                        Ok((header, body)) => {
-                            println!(
-                                "received operation {} {}",
-                                header.seq_num, header.public_key
-                            );
-
-                            Some((header, body))
-                        }
-                        Err(err) => {
-                            eprintln!("failed decoding operation: {err}");
-                            None
-                        }
-                    },
+                        Some((header, body))
+                    }
                     Err(err) => {
-                        eprintln!("failed receiver: {err}");
+                        eprintln!("failed decoding operation: {err}");
                         None
                     }
-                }
-            });
-
-            tokio::pin!(stream);
-
-            let (buf_tx, buf_rx) = mpsc::channel::<Operation<Extensions>>(128);
-            let mut buf_stream = ReceiverStream::new(buf_rx);
-            let stream = stream! {
-                loop {
-                    tokio::select! {
-                        biased;
-
-                        Some((header, body)) = stream.next() => {
-                            yield (header, body);
-                        }
-                        Some(operation) = buf_stream.next() => {
-                            yield (operation.header, operation.body);
-                        }
-                    }
-                }
-            };
-
-            let stream = tokio_stream::StreamExt::chunks_timeout(
-                stream,
-                10,
-                std::time::Duration::from_millis(50),
-            );
-
-            let stream = stream.map(|operations| async {
-                let mut store = store.clone();
-
-                let mut validated_operations = vec![];
-
-                for (header, body) in operations {
-                    // @TODO: Would be nice to pass arguments in by reference for the store. The
-                    // trait should not dictate that (for memory it'll be cloned though)
-                    match ingest_operation(&mut store, header.clone(), body.clone()).await {
-                        Ok(IngestResult::Success(operation)) => {
-                            validated_operations.push(operation)
-                        } // store and forward,
-                        Ok(IngestResult::Retry(operation)) => buf_tx
-                            .send(operation)
-                            .await
-                            .expect("channel receiver closed"), // push to buffer
-                        Ok(IngestResult::Invalid(_)) => (),
-                        Err(err) => {
-                            eprintln!("failed ingesting operation: {err}");
-                        }
-                    }
-                }
-
-                futures::stream::iter(validated_operations)
-            });
-
-            let stream = stream.buffered(10);
-            let stream = stream.flatten();
-
-            tokio::pin!(stream);
-
-            loop {
-                if let Some(operation) = stream.next().await {
-                    println!("{:?}", operation);
+                },
+                Err(err) => {
+                    eprintln!("failed receiver: {err}");
+                    None
                 }
             }
         });
-    }
+
+        tokio::pin!(stream);
+
+        let (buf_tx, buf_rx) = mpsc::channel::<Operation<Extensions>>(128);
+        let mut buf_stream = ReceiverStream::new(buf_rx);
+        let stream = stream! {
+            loop {
+                tokio::select! {
+                    biased;
+
+                    Some((header, body)) = stream.next() => {
+                        yield (header, body);
+                    }
+                    Some(operation) = buf_stream.next() => {
+                        yield (operation.header, operation.body);
+                    }
+                }
+            }
+        };
+
+        let stream = tokio_stream::StreamExt::chunks_timeout(
+            stream,
+            10,
+            std::time::Duration::from_millis(50),
+        );
+
+        let stream = stream.map(|operations| async {
+            let mut store = store.clone();
+
+            let mut validated_operations = vec![];
+
+            for (header, body) in operations {
+                // @TODO: Would be nice to pass arguments in by reference for the store. The
+                // trait should not dictate that (for memory it'll be cloned though)
+                match ingest_operation(&mut store, header.clone(), body.clone()).await {
+                    Ok(IngestResult::Success(operation)) => validated_operations.push(operation), // store and forward,
+                    Ok(IngestResult::Retry(operation)) => buf_tx
+                        .send(operation)
+                        .await
+                        .expect("channel receiver closed"), // push to buffer
+                    Ok(IngestResult::Invalid(_)) => (),
+                    Err(err) => {
+                        eprintln!("failed ingesting operation: {err}");
+                    }
+                }
+            }
+
+            futures::stream::iter(validated_operations)
+        });
+
+        let stream = stream.buffered(10);
+        let stream = stream.flatten();
+
+        tokio::pin!(stream);
+
+        loop {
+            if let Some(operation) = stream.next().await {
+                if let Some(body) = operation.body {
+                    let mut doc = doc.write().unwrap();
+                    doc.load_incremental(&body.to_bytes()).unwrap();
+                    let serialized =
+                        serde_json::to_string(&automerge::AutoSerde::from(&doc.clone())).unwrap();
+                    println!("{serialized}");
+                }
+            }
+        }
+    });
 
     tokio::signal::ctrl_c().await?;
 
