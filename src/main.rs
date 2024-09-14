@@ -169,8 +169,8 @@ async fn main() -> Result<()> {
                         .expect("creating operation");
 
                 println!(
-                    "created operation {} {}",
-                    operation.header.seq_num, operation.header.public_key
+                    "created operation seq_num={} public_key={} prune={}",
+                    operation.header.seq_num, operation.header.public_key, prune_flag
                 );
                 let bytes =
                     encode_operation(operation.header, operation.body).expect("encoding operation");
