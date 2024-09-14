@@ -135,27 +135,21 @@ async fn main() -> Result<()> {
             while let Some(text) = line_rx.recv().await {
                 let parts: Vec<_> = text.split(' ').collect();
 
-                if parts.len() != 3 && parts.len() != 4 {
+                if parts.len() != 2 && parts.len() != 3 {
                     continue;
                 }
 
-                let Ok(index) = usize::from_str(parts[0]) else {
-                    continue;
-                };
-
-                let prune_flag = parts.len() == 4 && parts[3].contains("prune");
+                let prune_flag = parts.len() == 3 && parts[2].contains("prune");
 
                 let bytes = {
                     let mut doc = doc.write().unwrap();
                     let contacts = match doc.get(automerge::ROOT, "contacts").unwrap() {
                         Some(contacts) => contacts.1,
                         None => doc
-                            .put_object(automerge::ROOT, "contacts", ObjType::List)
+                            .put_object(automerge::ROOT, "contacts", ObjType::Map)
                             .unwrap(),
                     };
-                    let item = doc.insert_object(&contacts, index, ObjType::Map).unwrap();
-                    doc.put(&item, "name", parts[1]).unwrap();
-                    doc.put(&item, "age", parts[2]).unwrap();
+                    doc.put(&contacts, parts[0], parts[1]).unwrap();
                     if prune_flag {
                         doc.save()
                     } else {
