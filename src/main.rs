@@ -121,6 +121,12 @@ async fn main() -> Result<()> {
         },
     )
     .private_key(private_key.clone())
+    // .relay(
+    //     "https://staging-euw1-1.relay.iroh.network".parse()?,
+    //     false,
+    //     0,
+    // )
+    // .direct_address(p2panda_core::PublicKey::from_str("")?, vec![], None)
     .discovery(LocalDiscovery::new()?)
     .build()
     .await?;
