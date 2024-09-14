@@ -6,7 +6,7 @@ use std::time::SystemTime;
 use anyhow::{anyhow, Context, Result};
 use async_stream::stream;
 use automerge::transaction::Transactable;
-use automerge::{AutoCommit, ObjType};
+use automerge::{AutoCommit, ObjType, ReadDoc};
 use futures::StreamExt;
 use p2panda_core::{
     validate_backlink, validate_operation, Body, Extension, Header, Operation, OperationError,
@@ -99,9 +99,7 @@ async fn main() -> Result<()> {
         .try_init()
         .ok();
 
-    let mut doc = AutoCommit::new();
-    let contacts = doc.put_object(automerge::ROOT, "contacts", ObjType::List)?;
-    let doc = Arc::new(RwLock::new(doc));
+    let doc = Arc::new(RwLock::new(AutoCommit::new()));
 
     let (line_tx, mut line_rx) = mpsc::channel(1);
     std::thread::spawn(move || input_loop(line_tx));
@@ -149,10 +147,15 @@ async fn main() -> Result<()> {
 
                 let bytes = {
                     let mut doc = doc.write().unwrap();
+                    let contacts = match doc.get(automerge::ROOT, "contacts").unwrap() {
+                        Some(contacts) => contacts.1,
+                        None => doc
+                            .put_object(automerge::ROOT, "contacts", ObjType::List)
+                            .unwrap(),
+                    };
                     let item = doc.insert_object(&contacts, index, ObjType::Map).unwrap();
                     doc.put(&item, "name", parts[1]).unwrap();
                     doc.put(&item, "age", parts[2]).unwrap();
-
                     if prune_flag {
                         doc.save()
                     } else {
