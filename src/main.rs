@@ -187,7 +187,10 @@ async fn main() -> Result<()> {
 
         let stream = stream.filter_map(|event| async {
             match event {
-                Ok(OutEvent::Ready) => None,
+                Ok(OutEvent::Ready) => {
+                    println!("connected");
+                    None
+                },
                 Ok(OutEvent::Message { bytes, .. }) => match decode_operation(&bytes) {
                     Ok((header, body)) => {
                         println!(
