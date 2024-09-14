@@ -143,7 +143,7 @@ async fn main() -> Result<()> {
                     continue;
                 };
 
-                let prune_flag = parts.len() == 4 && parts[3] == "prune";
+                let prune_flag = parts.len() == 4 && parts[3].contains("prune");
 
                 let bytes = {
                     let mut doc = doc.write().unwrap();
