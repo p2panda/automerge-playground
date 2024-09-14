@@ -243,8 +243,8 @@ async fn main() -> Result<()> {
             let mut validated_operations = vec![];
 
             for (header, body) in operations {
-                // @TODO: Would be nice to pass arguments in by reference for the store. The
-                // trait should not dictate that (for memory it'll be cloned though)
+                // @TODO: Would be nice to pass arguments in by reference for the store. The trait
+                // should not dictate that (for memory it'll be cloned though)
                 match ingest_operation(&mut store, header.clone(), body.clone()).await {
                     Ok(IngestResult::Success(operation)) => validated_operations.push(operation), // store and forward,
                     Ok(IngestResult::Retry(operation)) => buf_tx
@@ -424,13 +424,6 @@ async fn ingest_operation(
             }
         }
 
-        let log = store.get_log(operation.header.public_key, log_id.clone())?;
-        println!(
-            "log_len={}, public_key={}",
-            log.len(),
-            operation.header.public_key
-        );
-
         store
             .insert_operation(operation.clone(), log_id.clone())
             .context("critical store failure")?;
@@ -438,10 +431,17 @@ async fn ingest_operation(
         if prune_flag.is_set() {
             store.delete_operations(
                 operation.header.public_key,
-                log_id,
+                log_id.clone(),
                 operation.header.seq_num,
             )?;
         }
+
+        let log = store.get_log(operation.header.public_key, log_id)?;
+        println!(
+            "log_len={}, public_key={}",
+            log.len(),
+            operation.header.public_key
+        );
     }
 
     Ok(IngestResult::Success(operation))
