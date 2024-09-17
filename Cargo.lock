@@ -2109,10 +2109,7 @@ dependencies = [
  "p2panda-core",
  "p2panda-net",
  "p2panda-store",
- "p2panda-stream",
  "p2panda-sync",
- "pin-project",
- "pin-project-lite",
  "serde",
  "serde_json",
  "tokio",
@@ -2297,7 +2294,7 @@ dependencies = [
 [[package]]
 name = "p2panda-core"
 version = "0.1.0"
-source = "git+https://github.com/p2panda/p2panda.git?branch=net-sync#eb3b80c701726d3d8ff29e4063a4263107be2b8b"
+source = "git+https://github.com/p2panda/p2panda.git?branch=net-sync#c77025c1e7cfea47e1a56ee9025888412ea6ad84"
 dependencies = [
  "blake3",
  "ciborium",
@@ -2312,7 +2309,7 @@ dependencies = [
 [[package]]
 name = "p2panda-net"
 version = "0.1.0"
-source = "git+https://github.com/p2panda/p2panda.git?branch=net-sync#eb3b80c701726d3d8ff29e4063a4263107be2b8b"
+source = "git+https://github.com/p2panda/p2panda.git?branch=net-sync#c77025c1e7cfea47e1a56ee9025888412ea6ad84"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2340,24 +2337,16 @@ dependencies = [
 [[package]]
 name = "p2panda-store"
 version = "0.1.0"
-source = "git+https://github.com/p2panda/p2panda.git?branch=net-sync#eb3b80c701726d3d8ff29e4063a4263107be2b8b"
+source = "git+https://github.com/p2panda/p2panda.git?branch=net-sync#c77025c1e7cfea47e1a56ee9025888412ea6ad84"
 dependencies = [
  "p2panda-core",
  "thiserror",
 ]
 
 [[package]]
-name = "p2panda-stream"
-version = "0.1.0"
-source = "git+https://github.com/p2panda/p2panda.git?branch=streams#0c35a4df657fa954759b27aa3e7d2bf58578360d"
-dependencies = [
- "thiserror",
-]
-
-[[package]]
 name = "p2panda-sync"
 version = "0.1.0"
-source = "git+https://github.com/p2panda/p2panda.git?branch=net-sync#eb3b80c701726d3d8ff29e4063a4263107be2b8b"
+source = "git+https://github.com/p2panda/p2panda.git?branch=net-sync#c77025c1e7cfea47e1a56ee9025888412ea6ad84"
 dependencies = [
  "anyhow",
  "async-trait",

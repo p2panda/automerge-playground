@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::str::FromStr;
+// use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
@@ -20,9 +20,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::task;
 use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
+// use tracing_subscriber::layer::SubscriberExt;
+// use tracing_subscriber::util::SubscriberInitExt;
+// use tracing_subscriber::EnvFilter;
 
 const NETWORK_ID: [u8; 32] = [
     88, 32, 213, 152, 167, 24, 186, 1, 3, 254, 88, 233, 132, 3, 250, 122, 6, 92, 186, 200, 3, 56,
@@ -93,11 +93,11 @@ fn input_loop(line_tx: mpsc::Sender<String>) -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
-        .with(EnvFilter::from_default_env())
-        .try_init()
-        .ok();
+    // tracing_subscriber::registry()
+    //     .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+    //     .with(EnvFilter::from_default_env())
+    //     .try_init()
+    //     .ok();
 
     let doc = Arc::new(RwLock::new(AutoCommit::new()));
 
