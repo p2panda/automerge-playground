@@ -3,15 +3,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
-use anyhow::{anyhow, Context, Result};
-use async_stream::stream;
+use anyhow::Result;
 use automerge::transaction::Transactable;
 use automerge::{AutoCommit, ObjType, ReadDoc};
-use futures::StreamExt;
-use p2panda_core::{
-    validate_backlink, validate_operation, Body, Extension, Header, Operation, OperationError,
-    PrivateKey,
-};
+use p2panda_core::{Body, Extension, Header, Operation, PrivateKey};
+use p2panda_engine::extensions::{PruneFlag, StreamName};
+use p2panda_engine::{DecodeExt, IngestExt};
 use p2panda_net::network::{InEvent, OutEvent};
 use p2panda_net::{LocalDiscovery, NetworkBuilder};
 use p2panda_store::{LogStore, MemoryStore, OperationStore};
@@ -19,7 +16,8 @@ use p2panda_sync::protocols::log_height::LogHeightSyncProtocol;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::task;
-use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::StreamExt;
 // use tracing_subscriber::layer::SubscriberExt;
 // use tracing_subscriber::util::SubscriberInitExt;
 // use tracing_subscriber::EnvFilter;
@@ -31,53 +29,26 @@ const NETWORK_ID: [u8; 32] = [
 
 const TEST_TOPIC_ID: [u8; 32] = [1; 32];
 
-#[derive(Clone, Debug, Hash, Default, Eq, PartialEq, Serialize, Deserialize)]
-struct LogId(pub u64);
-
-#[derive(Clone, Debug, Hash, Default, Eq, PartialEq, Serialize, Deserialize)]
-struct PruneFlag(pub bool);
-
-impl PruneFlag {
-    fn is_set(&self) -> bool {
-        self.0
-    }
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 struct Extensions {
-    #[serde(rename = "l")]
-    pub log_id: LogId,
+    #[serde(rename = "s")]
+    pub stream_name: StreamName,
 
-    #[serde(
-        rename = "p",
-        skip_serializing_if = "std::ops::Not::not",
-        default = "default_prune_flag"
-    )]
-    pub prune_flag: bool,
+    #[serde(rename = "p", skip_serializing_if = "Option::is_none")]
+    pub prune_flag: Option<PruneFlag>,
 }
 
-fn default_prune_flag() -> bool {
-    false
-}
-
-impl Extension<LogId> for Extensions {
-    fn extract(&self) -> Option<LogId> {
-        Some(self.log_id.clone())
+impl Extension<StreamName> for Extensions {
+    fn extract(&self) -> Option<StreamName> {
+        Some(self.stream_name.clone())
     }
 }
 
 impl Extension<PruneFlag> for Extensions {
     fn extract(&self) -> Option<PruneFlag> {
-        Some(PruneFlag(self.prune_flag))
-    }
-}
-
-#[derive(Clone)]
-struct Store(Arc<RwLock<MemoryStore<LogId, Extensions>>>);
-
-impl Store {
-    pub fn new() -> Self {
-        Self(Arc::new(RwLock::new(MemoryStore::new())))
+        self.prune_flag
+            .clone()
+            .or_else(|| Some(PruneFlag::default()))
     }
 }
 
@@ -105,31 +76,29 @@ async fn main() -> Result<()> {
     std::thread::spawn(move || input_loop(line_tx));
 
     let private_key = PrivateKey::new();
-    let store = Store::new();
-    let log_id = LogId(1);
+    let store = MemoryStore::new();
+    let stream_name = StreamName::new(private_key.public_key(), Some("test".into()));
 
     println!("me: {}", private_key.public_key());
 
     let mut sync_map = HashMap::new();
-    sync_map.insert(TEST_TOPIC_ID, log_id.clone());
+    sync_map.insert(TEST_TOPIC_ID, stream_name.clone());
 
-    let network = NetworkBuilder::new(
-        NETWORK_ID,
-        LogHeightSyncProtocol {
+    let network = NetworkBuilder::new(NETWORK_ID)
+        .sync(LogHeightSyncProtocol {
             log_ids: sync_map,
-            store: store.0.clone(),
-        },
-    )
-    .private_key(private_key.clone())
-    // .relay(
-    //     "https://staging-euw1-1.relay.iroh.network".parse()?,
-    //     false,
-    //     0,
-    // )
-    // .direct_address(p2panda_core::PublicKey::from_str("")?, vec![], None)
-    .discovery(LocalDiscovery::new()?)
-    .build()
-    .await?;
+            store: store.clone(),
+        })
+        .private_key(private_key.clone())
+        // .relay(
+        //     "https://staging-euw1-1.relay.iroh.network".parse()?,
+        //     false,
+        //     0,
+        // )
+        // .direct_address(p2panda_core::PublicKey::from_str("")?, vec![], None)
+        .discovery(LocalDiscovery::new()?)
+        .build()
+        .await?;
 
     let (tx, rx) = network.subscribe(TEST_TOPIC_ID).await?;
 
@@ -163,17 +132,21 @@ async fn main() -> Result<()> {
                     }
                 };
 
-                let operation =
-                    create_operation(&mut store, &private_key, &log_id, Some(&bytes), prune_flag)
-                        .await
-                        .expect("creating operation");
+                let operation = create_operation(
+                    &mut store,
+                    &private_key,
+                    &stream_name,
+                    Some(&bytes),
+                    prune_flag,
+                )
+                .await
+                .expect("creating operation");
 
                 println!(
                     "created operation seq_num={} public_key={} prune={}",
                     operation.header.seq_num, operation.header.public_key, prune_flag
                 );
-                let bytes =
-                    encode_operation(operation.header, operation.body).expect("encoding operation");
+                let bytes = operation.header.to_bytes();
 
                 tx.send(InEvent::Message { bytes })
                     .await
@@ -185,86 +158,33 @@ async fn main() -> Result<()> {
     task::spawn(async move {
         let stream = BroadcastStream::new(rx);
 
-        let stream = stream.filter_map(|event| async {
-            match event {
-                Ok(OutEvent::Ready) => {
-                    println!("connected");
-                    None
-                }
-                Ok(OutEvent::Message { bytes, .. }) => match decode_operation(&bytes) {
-                    Ok((header, body)) => {
-                        println!(
-                            "received operation {} {}",
-                            header.seq_num, header.public_key
-                        );
-
-                        Some((header, body))
-                    }
-                    Err(err) => {
-                        eprintln!("failed decoding operation: {err}");
-                        None
-                    }
-                },
-                Err(err) => {
-                    eprintln!("failed receiver: {err}");
-                    None
-                }
+        let stream = stream.filter_map(|event| match event {
+            Ok(OutEvent::Ready) => {
+                println!("connected");
+                None
+            }
+            Ok(OutEvent::Message { bytes, .. }) => Some((bytes, None)),
+            Err(err) => {
+                eprintln!("failed receiver: {err}");
+                None
             }
         });
 
-        tokio::pin!(stream);
-
-        let (buf_tx, buf_rx) = mpsc::channel::<Operation<Extensions>>(128);
-        let mut buf_stream = ReceiverStream::new(buf_rx);
-        let stream = stream! {
-            loop {
-                tokio::select! {
-                    biased;
-
-                    Some((header, body)) = stream.next() => {
-                        yield (header, body);
-                    }
-                    Some(operation) = buf_stream.next() => {
-                        yield (operation.header, operation.body);
-                    }
-                }
+        let stream = stream.decode().filter_map(|event| match event {
+            Ok((header, body)) => Some((header, body)),
+            Err(err) => {
+                eprintln!("failed decoding operation: {err}");
+                None
             }
-        };
-
-        let stream = tokio_stream::StreamExt::chunks_timeout(
-            stream,
-            10,
-            std::time::Duration::from_millis(50),
-        );
-
-        let stream = stream.map(|operations| async {
-            let mut store = store.clone();
-
-            let mut validated_operations = vec![];
-
-            for (header, body) in operations {
-                // @TODO: Would be nice to pass arguments in by reference for the store. The trait
-                // should not dictate that (for memory it'll be cloned though)
-                match ingest_operation(&mut store, header.clone(), body.clone()).await {
-                    Ok(IngestResult::Success(operation)) => validated_operations.push(operation), // store and forward,
-                    Ok(IngestResult::Retry(operation)) => buf_tx
-                        .send(operation)
-                        .await
-                        .expect("channel receiver closed"), // push to buffer
-                    Ok(IngestResult::Invalid(_)) => (),
-                    Err(err) => {
-                        eprintln!("failed ingesting operation: {err}");
-                    }
-                }
-            }
-
-            futures::stream::iter(validated_operations)
         });
 
-        let stream = stream.buffered(10);
-        let stream = stream.flatten();
-
-        tokio::pin!(stream);
+        let mut stream = stream.ingest(store, 128).filter_map(|event| match event {
+            Ok(operation) => Some(operation),
+            Err(err) => {
+                eprintln!("failed ingesting operation: {err}");
+                None
+            }
+        });
 
         loop {
             if let Some(operation) = stream.next().await {
@@ -292,9 +212,9 @@ async fn main() -> Result<()> {
 }
 
 async fn create_operation(
-    store: &mut Store,
+    store: &mut MemoryStore<StreamName, Extensions>,
     private_key: &PrivateKey,
-    log_id: &LogId,
+    stream_name: &StreamName,
     body: Option<&[u8]>,
     prune_flag: bool,
 ) -> Result<Operation<Extensions>> {
@@ -302,9 +222,7 @@ async fn create_operation(
 
     let public_key = private_key.public_key();
 
-    let mut store = store.0.write().unwrap();
-
-    let latest_operation = store.latest_operation(public_key, log_id.to_owned())?;
+    let latest_operation = store.latest_operation(&public_key, &stream_name).await?;
 
     let (seq_num, backlink) = match latest_operation {
         Some(operation) => (operation.header.seq_num + 1, Some(operation.hash)),
@@ -316,8 +234,8 @@ async fn create_operation(
         .as_secs();
 
     let extensions = Extensions {
-        log_id: log_id.to_owned(),
-        prune_flag,
+        stream_name: stream_name.to_owned(),
+        prune_flag: Some(PruneFlag::new(prune_flag)),
     };
 
     let mut header = Header {
@@ -340,120 +258,21 @@ async fn create_operation(
         body,
     };
 
-    store.insert_operation(operation.clone(), log_id.to_owned())?;
+    store.insert_operation(&operation, &stream_name).await?;
 
     if prune_flag {
         assert!(
             operation.header.seq_num > 0,
             "can't prune from first operation in log"
         );
-        store.delete_operations(
-            operation.header.public_key,
-            log_id.to_owned(),
-            operation.header.seq_num,
-        )?;
+        store
+            .delete_operations(
+                &operation.header.public_key,
+                &stream_name,
+                operation.header.seq_num,
+            )
+            .await?;
     }
 
     Ok(operation)
-}
-
-enum IngestResult {
-    Success(Operation<Extensions>),
-    Retry(Operation<Extensions>),
-    #[allow(dead_code)]
-    Invalid(OperationError),
-}
-
-async fn ingest_operation(
-    store: &mut Store,
-    header: Header<Extensions>,
-    body: Option<Body>,
-) -> Result<IngestResult> {
-    let operation = Operation {
-        hash: header.hash(),
-        header,
-        body,
-    };
-
-    if let Err(err) = validate_operation(&operation) {
-        return Ok(IngestResult::Invalid(err));
-    }
-
-    let mut store = store.0.write().unwrap();
-
-    let already_exists = store.get_operation(operation.hash)?.is_some();
-    if !already_exists {
-        let log_id: LogId = operation
-            .header
-            .extract()
-            .ok_or(anyhow!("missing 'log_id' field in header"))?;
-        let prune_flag: PruneFlag = operation
-            .header
-            .extract()
-            .ok_or(anyhow!("missing 'prune_flag' field in header"))?;
-
-        // @TODO: Move this into `p2panda-core`
-        if !prune_flag.is_set() && operation.header.seq_num > 0 {
-            let latest_operation = store
-                .latest_operation(operation.header.public_key, log_id.to_owned())
-                .context("critical store failure")?;
-
-            match latest_operation {
-                Some(latest_operation) => {
-                    if let Err(err) = validate_backlink(&latest_operation.header, &operation.header)
-                    {
-                        match err {
-                            // These errors signify that the sequence number is incremental
-                            // however the backlink does not match
-                            OperationError::BacklinkMismatch
-                            | OperationError::BacklinkMissing
-                            // A log can only contain operations from one author
-                            | OperationError::TooManyAuthors => {
-                                return Ok(IngestResult::Invalid(err))
-                            }
-                            // We observe a gap in the log and therefore can't validate the
-                            // backlink yet
-                            OperationError::SeqNumNonIncremental(_, _) => {
-                                return Ok(IngestResult::Retry(operation))
-                            }
-                            _ => unreachable!(),
-                        }
-                    }
-                }
-                None => return Ok(IngestResult::Retry(operation)),
-            }
-        }
-
-        store
-            .insert_operation(operation.clone(), log_id.clone())
-            .context("critical store failure")?;
-
-        if prune_flag.is_set() {
-            store.delete_operations(
-                operation.header.public_key,
-                log_id.clone(),
-                operation.header.seq_num,
-            )?;
-        }
-
-        let log = store.get_log(operation.header.public_key, log_id)?;
-        println!(
-            "log_len={}, public_key={}",
-            log.len(),
-            operation.header.public_key
-        );
-    }
-
-    Ok(IngestResult::Success(operation))
-}
-
-fn decode_operation(bytes: &[u8]) -> Result<(Header<Extensions>, Option<Body>)> {
-    let header_and_body = ciborium::from_reader::<(Header<Extensions>, Option<Body>), _>(bytes)?;
-    Ok(header_and_body)
-}
-
-fn encode_operation(header: Header<Extensions>, body: Option<Body>) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    ciborium::ser::into_writer(&(header, body), &mut bytes)?;
-    Ok(bytes)
 }
