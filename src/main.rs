@@ -146,7 +146,11 @@ async fn main() -> Result<()> {
                     "created operation seq_num={} public_key={} prune={}",
                     operation.header.seq_num, operation.header.public_key, prune_flag
                 );
-                let bytes = operation.header.to_bytes();
+                let raw_operation = (
+                    operation.header.to_bytes(),
+                    operation.body.map(|body| body.to_bytes()),
+                );
+                let bytes = serde_json::to_vec(&raw_operation).expect("encoding");
 
                 tx.send(InEvent::Message { bytes })
                     .await
@@ -163,7 +167,17 @@ async fn main() -> Result<()> {
                 println!("connected");
                 None
             }
-            Ok(OutEvent::Message { bytes, .. }) => Some((bytes, None)),
+            Ok(OutEvent::Message { bytes, .. }) => {
+                let raw_operation: Result<(Vec<u8>, Option<Vec<u8>>), _> =
+                    serde_json::from_slice(&bytes);
+                match raw_operation {
+                    Ok(data) => Some(data),
+                    Err(err) => {
+                        eprintln!("failed deserializing JSON: {err}");
+                        None
+                    }
+                }
+            }
             Err(err) => {
                 eprintln!("failed receiver: {err}");
                 None
