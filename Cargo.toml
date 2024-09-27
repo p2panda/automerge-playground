@@ -11,11 +11,11 @@ ciborium = "0.2.2"
 clap = { version = "4.5.13", features = ["derive"] }
 futures = "0.3.30"
 hex = "0.4.3"
-p2panda-core = { git = "https://github.com/p2panda/p2panda.git", branch = "stream-engine" }
-p2panda-engine = { git = "https://github.com/p2panda/p2panda.git", branch = "stream-engine" }
-p2panda-net = { git = "https://github.com/p2panda/p2panda.git", branch = "stream-engine" }
-p2panda-store = { git = "https://github.com/p2panda/p2panda.git", branch = "stream-engine" }
-p2panda-sync = { git = "https://github.com/p2panda/p2panda.git", branch = "stream-engine" }
+p2panda-core = { git = "https://github.com/p2panda/p2panda.git", branch = "v2" }
+p2panda-engine = { git = "https://github.com/p2panda/p2panda.git", branch = "v2" }
+p2panda-net = { git = "https://github.com/p2panda/p2panda.git", branch = "v2" }
+p2panda-store = { git = "https://github.com/p2panda/p2panda.git", branch = "v2" }
+p2panda-sync = { git = "https://github.com/p2panda/p2panda.git", branch = "v2" }
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.128"
 tokio = { version = "1.40.0", features = ["full"] }
