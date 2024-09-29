@@ -221,6 +221,10 @@ async fn main() -> Result<()> {
 
     tokio::signal::ctrl_c().await?;
 
+    println!("shutting down ..");
+
+    network.shutdown().await?;
+
     Ok(())
 }
 
